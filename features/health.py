@@ -1,4 +1,3 @@
-
 import asyncio
 import os
 import re
@@ -60,13 +59,14 @@ async def run_health_check_async(targets):
         results = await asyncio.gather(*tasks)
     return results
 
+# Server targets (Cloudflare global + Trimitra lokal Indonesia)
 _CF_DL_URL = "https://speed.cloudflare.com/__down?bytes=10000000"
 _CF_UL_URL = "https://speed.cloudflare.com/__up"
-_LS_DL_URL = "https://librespeed.snt.utwente.nl/backend/garbage.php?ckSize=10"
-_LS_UL_URL = "https://librespeed.snt.utwente.nl/backend/empty.php"
+_TM_DL_URL = "http://ooklaserver.trimitra.net.id:8080/speedtest/download?size=10000000"
+_TM_UL_URL = "http://ooklaserver.trimitra.net.id:8080/speedtest/upload.php"
 
 async def _test_download(url, label):
-    """Download 10MB dari provider, return kecepatan dalam Mbps."""
+    """Download data dari provider, return kecepatan dalam Mbps."""
     try:
         def do_download():
             req = urllib.request.Request(url, headers={
@@ -88,11 +88,11 @@ async def _test_download(url, label):
         return {"provider": label, "mbps": 0.0, "error": str(e)[:60]}
 
 async def _test_upload(url, label):
-    """Upload 10MB ke provider, return kecepatan dalam Mbps."""
+    """Upload data ke provider, return kecepatan dalam Mbps."""
     try:
         def do_upload():
-            chunk = os.urandom(1_000_000)
-            data  = chunk * 10
+            # Mengirimkan data random berukuran 1MB (1,000,000 bytes) agar efisien tapi akurat di Termux
+            data = os.urandom(1_000_000)
             req = urllib.request.Request(url, data=data, headers={
                 'User-Agent':     'Mozilla/5.0 (Linux; Android 10)',
                 'Content-Type':   'application/octet-stream',
@@ -113,34 +113,55 @@ async def _test_upload(url, label):
         return {"provider": label, "mbps": 0.0, "error": str(e)[:60]}
 
 async def run_speedtest_async():
-    console.print(" [bold cyan][ ⬇ ][/bold cyan] [cyan]Menguji Download (Cloudflare + LibreSpeed)...[/cyan]")
-    dl_cf, dl_ls = await asyncio.gather(
-        _test_download(_CF_DL_URL, "Cloudflare"),
-        _test_download(_LS_DL_URL, "LibreSpeed"),
-    )
+    # 1. Animasi Download
+    with Progress(
+        SpinnerColumn(spinner_name="dots", style="cyan"),
+        TextColumn("[bold cyan]{task.description}[/bold cyan]"),
+        console=console,
+        transient=True
+    ) as progress:
+        progress.add_task("Menguji Download (Cloudflare + Trimitra)...", total=None)
+        dl_cf, dl_tm = await asyncio.gather(
+            _test_download(_CF_DL_URL, "Cloudflare"),
+            _test_download(_TM_DL_URL, "Trimitra"),
+        )
     console.print(" [bold green][ ✔ ][/bold green] [cyan]Download Test (Selesai)[/cyan]")
 
-    console.print(" [bold yellow][ ⬆ ][/bold yellow] [yellow]Menguji Upload (Cloudflare + LibreSpeed)...[/yellow]")
-    ul_cf, ul_ls = await asyncio.gather(
-        _test_upload(_CF_UL_URL, "Cloudflare"),
-        _test_upload(_LS_UL_URL, "LibreSpeed"),
-    )
-    console.print(" [bold green][ ✔ ][/bold green] [yellow]Upload Test (Selesai)[/yellow]")
+    # 2. Animasi Upload
+    with Progress(
+        SpinnerColumn(spinner_name="dots", style="yellow"),
+        TextColumn("[bold yellow]{task.description}[/bold yellow]"),
+        console=console,
+        transient=True
+    ) as progress:
+        progress.add_task("Menguji Upload (Cloudflare + Trimitra)...", total=None)
+        ul_cf, ul_tm = await asyncio.gather(
+            _test_upload(_CF_UL_URL, "Cloudflare"),
+            _test_upload(_TM_UL_URL, "Trimitra"),
+        )
+    console.print(" [bold green][ ✔ ][/bold green] [yellow]Upload Test (Selesai)[/cyan]" if "[cyan]" in "dummy" else " [bold green][ ✔ ][/bold green] [yellow]Upload Test (Selesai)[/yellow]")
 
-    console.print(" [bold magenta][ ◎ ][/bold magenta] [magenta]Mengukur Ping...[/magenta]")
-    ping_result = await async_wan_ping("speed.cloudflare.com")
-    ping_ms = ping_result.get("ping", 0.0)
+    # 3. Animasi Mengukur Ping
+    with Progress(
+        SpinnerColumn(spinner_name="dots", style="magenta"),
+        TextColumn("[bold magenta]{task.description}[/bold magenta]"),
+        console=console,
+        transient=True
+    ) as progress:
+        progress.add_task("Mengukur Ping ke Cloudflare...", total=None)
+        ping_result = await async_wan_ping("speed.cloudflare.com")
+        ping_ms = ping_result.get("ping", 0.0)
     console.print(" [bold green][ ✔ ][/bold green] [magenta]Ping (Selesai)[/magenta]")
 
-    dl_valid = [r for r in [dl_cf, dl_ls] if not r["error"] and r["mbps"] > 0]
-    ul_valid = [r for r in [ul_cf, ul_ls] if not r["error"] and r["mbps"] > 0]
+    dl_valid = [r for r in [dl_cf, dl_tm] if not r["error"] and r["mbps"] > 0]
+    ul_valid = [r for r in [ul_cf, ul_tm] if not r["error"] and r["mbps"] > 0]
 
     avg_dl = round(sum(r["mbps"] for r in dl_valid) / len(dl_valid), 2) if dl_valid else 0.0
     avg_ul = round(sum(r["mbps"] for r in ul_valid) / len(ul_valid), 2) if ul_valid else 0.0
 
     return {
-        "download_results": [dl_cf, dl_ls],
-        "upload_results":   [ul_cf, ul_ls],
+        "download_results": [dl_cf, dl_tm],
+        "upload_results":   [ul_cf, ul_tm],
         "avg_download":     avg_dl,
         "avg_upload":       avg_ul,
         "ping":             ping_ms,
@@ -323,4 +344,5 @@ async def run_health_menu():
 
         elif sub_choice == '0':
             break
+
 
