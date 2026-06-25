@@ -1,3 +1,4 @@
+
 import asyncio
 import os
 import re
@@ -7,6 +8,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 from rich.panel import Panel
 from rich.align import Align
+from rich.markup import escape
 from rich import box
 
 from shared.ui import console, get_latency_color
@@ -50,9 +52,10 @@ async def async_wan_ping(target):
 async def run_health_check_async(targets):
     results = []
     with Progress(
-        SpinnerColumn(spinner_name="line", style="magenta"),
+        SpinnerColumn(spinner_name="moon", style="bold magenta"),
         TextColumn("[bold magenta]Menguji kestabilan koneksi global (Mohon tunggu 4 detik)...[/bold magenta]"),
-        console=console
+        console=console,
+        transient=True
     ) as progress:
         progress.add_task("wait", total=None)
         tasks = [async_wan_ping(t) for t in targets]
@@ -91,7 +94,6 @@ async def _test_upload(url, label):
     """Upload data ke provider, return kecepatan dalam Mbps."""
     try:
         def do_upload():
-            # Mengirimkan data random berukuran 1MB (1,000,000 bytes) agar efisien tapi akurat di Termux
             data = os.urandom(1_000_000)
             req = urllib.request.Request(url, data=data, headers={
                 'User-Agent':     'Mozilla/5.0 (Linux; Android 10)',
@@ -113,42 +115,42 @@ async def _test_upload(url, label):
         return {"provider": label, "mbps": 0.0, "error": str(e)[:60]}
 
 async def run_speedtest_async():
-    # 1. Animasi Download
+    # 1. Animasi Download (Astro Moon)
     with Progress(
-        SpinnerColumn(spinner_name="dots", style="cyan"),
-        TextColumn("[bold cyan]{task.description}[/bold cyan]"),
+        SpinnerColumn(spinner_name="moon", style="bold cyan"),
+        TextColumn("[bold cyan]Menguji Download (Cloudflare + Trimitra)...[/bold cyan]"),
         console=console,
         transient=True
     ) as progress:
-        progress.add_task("Menguji Download (Cloudflare + Trimitra)...", total=None)
+        progress.add_task("dl", total=None)
         dl_cf, dl_tm = await asyncio.gather(
             _test_download(_CF_DL_URL, "Cloudflare"),
             _test_download(_TM_DL_URL, "Trimitra"),
         )
     console.print(" [bold green][ ✔ ][/bold green] [cyan]Download Test (Selesai)[/cyan]")
 
-    # 2. Animasi Upload
+    # 2. Animasi Upload (Astro Moon)
     with Progress(
-        SpinnerColumn(spinner_name="dots", style="yellow"),
-        TextColumn("[bold yellow]{task.description}[/bold yellow]"),
+        SpinnerColumn(spinner_name="moon", style="bold yellow"),
+        TextColumn("[bold yellow]Menguji Upload (Cloudflare + Trimitra)...[/bold yellow]"),
         console=console,
         transient=True
     ) as progress:
-        progress.add_task("Menguji Upload (Cloudflare + Trimitra)...", total=None)
+        progress.add_task("ul", total=None)
         ul_cf, ul_tm = await asyncio.gather(
             _test_upload(_CF_UL_URL, "Cloudflare"),
             _test_upload(_TM_UL_URL, "Trimitra"),
         )
-    console.print(" [bold green][ ✔ ][/bold green] [yellow]Upload Test (Selesai)[/cyan]" if "[cyan]" in "dummy" else " [bold green][ ✔ ][/bold green] [yellow]Upload Test (Selesai)[/yellow]")
+    console.print(" [bold green][ ✔ ][/bold green] [yellow]Upload Test (Selesai)[/yellow]")
 
-    # 3. Animasi Mengukur Ping
+    # 3. Animasi Mengukur Ping (Astro Moon)
     with Progress(
-        SpinnerColumn(spinner_name="dots", style="magenta"),
-        TextColumn("[bold magenta]{task.description}[/bold magenta]"),
+        SpinnerColumn(spinner_name="moon", style="bold magenta"),
+        TextColumn("[bold magenta]Mengukur Ping ke Cloudflare...[/bold magenta]"),
         console=console,
         transient=True
     ) as progress:
-        progress.add_task("Mengukur Ping ke Cloudflare...", total=None)
+        progress.add_task("ping", total=None)
         ping_result = await async_wan_ping("speed.cloudflare.com")
         ping_ms = ping_result.get("ping", 0.0)
     console.print(" [bold green][ ✔ ][/bold green] [magenta]Ping (Selesai)[/magenta]")
@@ -255,6 +257,7 @@ def draw_speedtest_results(results):
     avg_ul     = results.get("avg_upload",       0.0)
     ping_ms    = results.get("ping",             0.0)
 
+    # Mempertahankan 100% format tabel bawaan lu yang rapi di layar portrait HP
     table = Table(
         title="[bold cyan]Hasil Uji Kecepatan Bandwidth[/bold cyan]",
         box=box.ROUNDED, header_style="bold magenta"
@@ -333,7 +336,8 @@ async def run_health_menu():
             except ImportError:
                 console.print("[bold red]Error: Library 'speedtest-cli' belum terinstall.[/bold red]")
             except Exception as e:
-                console.print(f"\n[bold red]Ups, terjadi kegagalan saat Speedtest: {e}[/bold red]")
+                safe_error = escape(str(e))
+                console.print(f"\n[bold red]Ups, terjadi kegagalan saat Speedtest:[/bold red] [yellow]{safe_error}[/yellow]")
                 console.print("[dim]Pastikan koneksi internet aktif.[/dim]")
 
             console.print("\n[dim]----------------------------------------[/dim]")
@@ -344,5 +348,4 @@ async def run_health_menu():
 
         elif sub_choice == '0':
             break
-
 
