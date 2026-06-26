@@ -6,137 +6,15 @@ import json
 import ssl
 import socket
 import urllib.request
-import urllib.error
 from datetime import datetime
 from rich.panel import Panel
-from rich.table import Table
-from rich.align import Align
-from rich.markup import escape
 from rich import box
 
 from shared.ui import console
 from shared.net import is_ip_address
 from shared.config import EXPORTS_DIR, ensure_exports_dir
 
-# User-Agent Premium untuk melewati deteksi bot standar
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1',
-    'Accept': 'application/json, text/html, */*'
-}
-
-async def fetch_with_retry(url, headers=HEADERS, retries=2, delay=1):
-    """Helper untuk melakukan HTTP request dengan proteksi retry otomatis."""
-    for attempt in range(retries):
-        try:
-            def do_req():
-                req = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(req, timeout=8) as resp:
-                    return resp.read()
-            return await asyncio.to_thread(do_req)
-        except Exception:
-            if attempt < retries - 1:
-                await asyncio.sleep(delay * (attempt + 1))
-                continue
-    return None
-
-# ================= HIGH-FIDELITY SUBDOMAIN ENGINES =================
-
-async def engine_rapiddns(domain: str) -> set:
-    """Engine 1: RapidDNS Scraper (HTML Parser Bypass)"""
-    url = f"https://rapiddns.io/subdomain/{domain}?full=1"
-    try:
-        raw = await fetch_with_retry(url)
-        if not raw: return set()
-        html = raw.decode('utf-8', errors='ignore')
-        pattern = rf'<td>([a-zA-Z0-9\-\.]+\.{re.escape(domain)})</td>'
-        found = set(re.findall(pattern, html))
-        return {sub.lower().strip() for sub in found if sub.lower().strip() != domain}
-    except Exception:
-        return set()
-
-async def engine_crtsh_lightweight(domain: str) -> tuple:
-    """Engine 2: crt.sh lightweight (Direct Index Search - No Wildcard Lock)
-    Mengembalikan tuple: (set_subdomain, is_success)"""
-    url = f"https://crt.sh/?q={domain}&output=json"
-    try:
-        raw = await fetch_with_retry(url)
-        if raw is None: 
-            return set(), False  # Server down / timeout
-        data = json.loads(raw.decode('utf-8'))
-        subdomains = set()
-        for entry in data:
-            names = entry.get('name_value', '').split('\n')
-            for name in names:
-                name = name.strip().lower()
-                if name.startswith("*."): name = name[2:]
-                if name.endswith(domain) and name != domain:
-                    if re.match(r'^[a-zA-Z0-9\-\.]+$', name):
-                        subdomains.add(name)
-        return subdomains, True  # Berhasil kontak server dengan aman
-    except Exception:
-        return set(), False
-
-async def engine_threatminer(domain: str) -> set:
-    """Engine 3: ThreatMiner API (Enterprise Security Passive DNS - High Stability)"""
-    url = f"https://api.threatminer.org/v2/domain.php?q={domain}&rt=5"
-    try:
-        raw = await fetch_with_retry(url)
-        if not raw: return set()
-        data = json.loads(raw.decode('utf-8'))
-        subdomains = set()
-        results = data.get('results', [])
-        if isinstance(results, list):
-            for name in results:
-                name = name.strip().lower()
-                if name.endswith(domain) and name != domain:
-                    if re.match(r'^[a-zA-Z0-9\-\.]+$', name):
-                        subdomains.add(name)
-        return subdomains
-    except Exception:
-        return set()
-
-async def engine_wayback_optimized(domain: str) -> set:
-    """Engine 4: Wayback Machine CDX (Wildcard URL Extractor)"""
-    url = f"https://web.archive.org/cdx/search/cdx?url=*.{domain}/*&output=json&fl=original&collapse=urlkey&limit=1500"
-    try:
-        raw = await fetch_with_retry(url)
-        if not raw: return set()
-        data = json.loads(raw.decode('utf-8'))
-        subdomains = set()
-        if len(data) > 1:
-            for item in data[1:]:
-                url_str = item[0]
-                match = re.search(r'https?://([^:/\s]+)', url_str)
-                if match:
-                    host = match.group(1).strip().lower()
-                    if host.endswith(domain) and host != domain:
-                        if re.match(r'^[a-zA-Z0-9\-\.]+$', host):
-                            subdomains.add(host)
-        return subdomains
-    except Exception:
-        return set()
-
-async def engine_hackertarget_conditional(domain: str) -> set:
-    """Engine 5: HackerTarget (Dynamic Shield Mode - Hanya dipanggil saat darurat)"""
-    url = f"https://api.hackertarget.com/hostsearch/?q={domain}"
-    try:
-        raw = await fetch_with_retry(url)
-        if not raw: return set()
-        data_str = raw.decode('utf-8', errors='ignore').strip()
-        if "error" in data_str.lower() or "not found" in data_str.lower():
-            return set()
-        subdomains = set()
-        for line in data_str.split('\n'):
-            if "," in line:
-                sub, _ = line.split(',', 1)
-                subdomains.add(sub.strip().lower())
-            else:
-                subdomains.add(line.strip().lower())
-        return {sub for sub in subdomains if sub != domain and sub.endswith(domain)}
-    except Exception:
-        return set()
-
-# ================= CORE OSINT SERVICES =================
+# ================= OSINT: SSL Inspector =================
 
 async def get_ssl_info(target, is_ip=False):
     try:
@@ -188,6 +66,8 @@ async def get_ssl_info(target, is_ip=False):
     except Exception as e:
         return {"error": str(e)[:60], "status": "error", "is_ip": is_ip, "issued_to": "N/A", "issuer": "N/A", "days_left": 0, "sans": []}
 
+# ================= OSINT: DNS Deep Lookup =================
+
 async def get_dns_records(domain):
     results = {
         "A": [], "AAAA": [], "MX": [], "NS": [], "TXT": [],
@@ -225,6 +105,8 @@ async def get_dns_records(domain):
 
     results['dmarc'] = await asyncio.to_thread(fetch_dmarc)
     return results
+
+# ================= OSINT: WHOIS Lookup =================
 
 def _parse_whois_domain(raw):
     def _find(patterns, text):
@@ -371,6 +253,8 @@ async def get_whois_info(target, is_ip=False):
             console.print(" [bold yellow][ ↩ ][/bold yellow] [yellow]whois CLI hasilnya kosong, coba RDAP...[/yellow]")
         return await _rdap_fallback_domain(target)
 
+# ================= OSINT: HTTP & Risk =================
+
 async def get_http_headers(target):
     try:
         def fetch_headers():
@@ -465,15 +349,9 @@ def calculate_risk_verdict(ssl_info, dns_info, whois_info, http_info, target, is
 
     return {"domain": target, "issues": issues, "positives": positives, "risk_level": risk_level, "risk_color": risk_color, "risk_emoji": risk_emoji, "risk_score": score, "cdn": cdn}
 
-# ================= CORE RECON CONTROLLER =================
-
 async def run_osint_recon_async(target):
     is_ip = is_ip_address(target)
-    results = {
-        "domain": target, "ips": [], "geo": {}, "ssl": {}, "dns": {}, 
-        "whois": {}, "http": {}, "risk": {}, "trace": "", "is_ip": is_ip,
-        "subdomains": set(), "sub_sources": {}
-    }
+    results = {"domain": target, "ips": [], "geo": {}, "ssl": {}, "dns": {}, "whois": {}, "http": {}, "risk": {}, "trace": "", "is_ip": is_ip}
     label = "IP" if is_ip else "Domain"
 
     with console.status(f"[bold cyan]Memulai rekon OSINT untuk {label}: {target}...[/bold cyan]", spinner="dots") as status:
@@ -491,7 +369,6 @@ async def run_osint_recon_async(target):
             results["ssl"] = await get_ssl_info(target, is_ip=True)
             results["dns"] = {"error": "DNS lookup tidak relevan untuk IP address", "skipped": True}
             results["whois"] = await get_whois_info(target, is_ip=True)
-            results["http"] = await get_http_headers(target)
         else:
             try:
                 _, _, ip_list = await asyncio.to_thread(socket.gethostbyname_ex, target)
@@ -512,68 +389,8 @@ async def run_osint_recon_async(target):
             results["ssl"] = await get_ssl_info(target, is_ip=False)
             results["dns"] = await get_dns_records(target)
             results["whois"] = await get_whois_info(target, is_ip=False)
-            results["http"] = await get_http_headers(target)
 
-            # =======================================================================
-            # --- SMART TARGET PROFILING (Kecerdasan Skala Infrastruktur) ---------
-            # =======================================================================
-            is_enterprise = False
-            cdn_detected = results["http"].get("cdn")
-            
-            # Hitung kepadatan DNS Records (A, AAAA, MX, NS)
-            dns_density = (
-                len(results["dns"].get("A", [])) + 
-                len(results["dns"].get("AAAA", [])) + 
-                len(results["dns"].get("MX", [])) + 
-                len(results["dns"].get("NS", []))
-            )
-            
-            # Jika menggunakan CDN raksasa ATAU memiliki DNS Records kompleks, tandai Enterprise (Big Fish)
-            if cdn_detected in ['Cloudflare', 'Akamai', 'AWS CloudFront', 'Fastly'] or dns_density > 4:
-                is_enterprise = True
-
-            # --- RESILIENT SUBDOMAIN RECON (TARGET-PROFILING TRIGGER) ---
-            console.print(" [bold yellow][*][/bold yellow] [cyan]Mengeksekusi Target-Profiling Subdomain Recon...[/cyan]")
-            
-            # Jalankan 4 engine utama paralel
-            t_rapid, (t_crt, crt_ok), t_tm, t_way = await asyncio.gather(
-                engine_rapiddns(target),
-                engine_crtsh_lightweight(target),
-                engine_threatminer(target),
-                engine_wayback_optimized(target)
-            )
-            
-            gathered = t_rapid.union(t_crt).union(t_tm).union(t_way)
-            
-            # =======================================================================
-            # --- LOGIKA CIRCUIT BREAKER (PERLINDUNGAN LIMIT API) ------------------
-            # =======================================================================
-            t_ht = set()
-            
-            if not crt_ok and is_enterprise and len(gathered) < 15:
-                # Kondisi kritis terpenuhi: crt.sh pingsan, target raksasa, namun hasil scraper sepi
-                console.print(" [bold red][ ⚡ ][/bold red] [red]crt.sh DOWN + Target Enterprise Terdeteksi! Menembak HackerTarget Shield...[/red]")
-                t_ht = await engine_hackertarget_conditional(target)
-                gathered = gathered.union(t_ht)
-            else:
-                # Pemberitahuan status di terminal
-                if not crt_ok:
-                    console.print(" [bold yellow][ ℹ ][/bold yellow] [yellow]crt.sh DOWN, namun target skala kecil/menengah. HackerTarget DIHEMAT.[/yellow]")
-                else:
-                    console.print(" [bold green][ ✔ ][/bold green] [green]Kluster Utama (crt.sh) Sehat. HackerTarget diistirahatkan.[/green]")
-                    
-            results["subdomains"] = gathered
-            
-            # Petakan inisial sumber data [R, C, T, W, H]
-            for sub in gathered:
-                srcs = []
-                if sub in t_rapid: srcs.append("Rapid")
-                if sub in t_crt: srcs.append("crt.sh")
-                if sub in t_tm: srcs.append("ThreatMiner")
-                if sub in t_way: srcs.append("Wayback")
-                if sub in t_ht: srcs.append("HackerTarget")
-                results["sub_sources"][sub] = srcs
-
+        results["http"] = await get_http_headers(target)
         try:
             proc = await asyncio.create_subprocess_exec("traceroute", "-m", "15", "-w", "1", target, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
             stdout, _ = await proc.communicate()
@@ -585,7 +402,7 @@ async def run_osint_recon_async(target):
         results["risk"] = calculate_risk_verdict(results["ssl"], results["dns"], results["whois"], results["http"], target, is_ip=is_ip)
     return results
 
-# ================= OSINT: UI RENDERING (MOBILE OPTIMIZED) =================
+# ================= OSINT: UI & Export Functions =================
 
 def draw_risk_verdict(risk_i):
     if not risk_i: return
@@ -617,8 +434,6 @@ def draw_osint_results(results):
     risk_i  = results.get("risk",  {})
     trace   = results.get("trace",  "")
     is_ip   = results.get("is_ip", False)
-    subdomains = results.get("subdomains", set())
-    sub_sources = results.get("sub_sources", {})
 
     console.print(f"\n[bold magenta]{'='*10} Hasil Analisis OSINT: {domain} {'='*10}[/bold magenta]")
 
@@ -670,48 +485,6 @@ def draw_osint_results(results):
         dns_lines.append(f"\n [bold]SPF  :[/bold] {spf_str}   [bold]DMARC:[/bold] {dmarc_str}")
         dns_text = "\n".join(dns_lines) if dns_lines else "[dim]Tidak ada record ditemukan.[/dim]"
         console.print(Panel(dns_text, title="[bold magenta]🔎 DNS Deep Lookup[/bold magenta]", border_style="magenta", expand=False))
-
-    # Rendering Subdomain responsive (Anti-Potong)
-    if not is_ip:
-        if not subdomains:
-            console.print(Panel("[dim]Tidak ada subdomain pasif yang terendus di seluruh database global.[/dim]", title="[bold cyan]🎯 Subdomains Map[/bold cyan]", border_style="cyan", expand=False))
-        else:
-            term_width = console.width
-            is_compact_view = term_width < 60
-
-            table = Table(
-                title=f"[bold cyan]Daftar Subdomain Unik ({len(subdomains)} Host)[/bold cyan]",
-                box=box.ROUNDED,
-                border_style="cyan"
-            )
-            table.add_column("No", justify="center", style="dim", width=4)
-            
-            if is_compact_view:
-                table.add_column("Host Subdomain (Format Ringkas [Sumber])", style="green")
-            else:
-                table.add_column("Host Subdomain", style="green", min_width=30)
-                table.add_column("Sumber", justify="center", style="yellow")
-
-            for idx, sub in enumerate(sorted(list(subdomains)), 1):
-                raw_srcs = sub_sources.get(sub, [])
-                short_srcs = []
-                for s in raw_srcs:
-                    if s == "Rapid": short_srcs.append("R")
-                    elif s == "crt.sh": short_srcs.append("C")
-                    elif s == "ThreatMiner": short_srcs.append("T")
-                    elif s == "Wayback": short_srcs.append("W")
-                    elif s == "HackerTarget": short_srcs.append("H")
-                
-                src_str = ",".join(short_srcs)
-
-                if is_compact_view:
-                    table.add_row(str(idx), f"{sub} [dim][{src_str}][/dim]")
-                else:
-                    table.add_row(str(idx), sub, src_str)
-
-            console.print("\n")
-            console.print(Align.center(table))
-            console.print("[dim]Keterangan Sumber (Src): [R] Rapid | [C] crt.sh | [T] ThreatMiner | [W] Wayback | [H] HackerTarget[/dim]")
 
     if whois_i.get("error"):
         whois_text  = f"[red]{whois_i['error']}[/red]"
@@ -807,7 +580,6 @@ def export_osint_results(results, target, fmt):
             "geoip": {"isp": geo_i.get("isp", "N/A"), "as": geo_i.get("as", "N/A"), "kota": geo_i.get("city", "N/A"), "negara": geo_i.get("country","N/A")},
             "ssl": {"issued_to": ssl_i.get("issued_to", "N/A"), "issuer": ssl_i.get("issuer", "N/A"), "berlaku_dari": ssl_i.get("not_before", "N/A"), "berlaku_sampai": ssl_i.get("not_after", "N/A"), "sisa_hari": ssl_i.get("days_left", 0), "status": ssl_i.get("status", "N/A"), "sans": ssl_i.get("sans", [])},
             "dns": {"skipped": True} if is_ip else {"A": dns_i.get("A", []), "AAAA": dns_i.get("AAAA", []), "MX": dns_i.get("MX", []), "NS": dns_i.get("NS", []), "TXT": dns_i.get("TXT", []), "spf": dns_i.get("spf", False), "dmarc": dns_i.get("dmarc", False)},
-            "subdomains": list(results.get("subdomains", [])),
             "whois": whois_section,
             "http_headers": {"server": http_i.get("server", "-"), "powered_by": http_i.get("powered_by", "-"), "cdn_waf": http_i.get("cdn", None), "security_headers": http_i.get("security_headers", {})},
             "risk_verdict": {"risk_level": risk_i.get("risk_level", "N/A"), "risk_score": risk_i.get("risk_score", 0), "issues": risk_i.get("issues", []), "positives": risk_i.get("positives", [])},
@@ -849,11 +621,6 @@ def export_osint_results(results, target, fmt):
                             display = r[:70] + "..." if len(r) > 70 else r
                             lines.append(f"    -> {display}")
                 lines.extend([f"  SPF   : {'Ada' if dns_i.get('spf') else 'Tidak ada'}", f"  DMARC : {'Ada' if dns_i.get('dmarc') else 'Tidak ada'}"])
-            
-            lines.extend(["", "[Subdomains Map]"])
-            for idx, sub in enumerate(sorted(list(results.get("subdomains", []))), 1):
-                lines.append(f"  {idx}. {sub}")
-                
             lines.extend(["", "[WHOIS Domain]"])
             if whois_i.get("error"): lines.append(f"  Error: {whois_i['error']}")
             else:
@@ -907,3 +674,5 @@ async def run_osint_menu():
 
         console.print("\n[dim]----------------------------------------[/dim]")
         input(" Tekan [ENTER] untuk kembali ke menu...")
+
+
